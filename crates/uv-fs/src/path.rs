@@ -117,6 +117,46 @@ impl<T: AsRef<Path>> Simplified for T {
     }
 }
 
+/// Convert a path to a Windows verbatim path (`\\?\`).
+///
+/// The verbatim prefix bypasses Win32 path normalization, which allows operating on paths that
+/// contain special characters (like trailing dots or spaces) that are normally stripped, or that
+/// exceed the `MAX_PATH` limit.
+///
+/// Returns the path unchanged if it is already verbatim, relative, or a device path.
+#[cfg(windows)]
+pub fn to_verbatim_path(path: &Path) -> Cow<'_, Path> {
+    use std::ffi::OsString;
+    use std::path::Prefix;
+
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        // Relative path, return unchanged.
+        return Cow::Borrowed(path);
+    };
+
+    match prefix.kind() {
+        Prefix::Verbatim(_) | Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) => {
+            Cow::Borrowed(path)
+        }
+        Prefix::UNC(server, share) => {
+            let mut verbatim = PathBuf::from(r"\\?\UNC");
+            verbatim.push(server);
+            verbatim.push(share);
+            // Collect the remaining components after the prefix (RootDir + Normal segments).
+            let suffix: PathBuf = path.components().skip(1).collect();
+            verbatim.push(suffix);
+            Cow::Owned(verbatim)
+        }
+        Prefix::Disk(_) => {
+            let mut verbatim = OsString::from(r"\\?\");
+            verbatim.push(path.as_os_str());
+            Cow::Owned(PathBuf::from(verbatim))
+        }
+        // Device namespace path (e.g., \\.\device), return unchanged.
+        Prefix::DeviceNS(_) => Cow::Borrowed(path),
+    }
+}
+
 pub trait PythonExt {
     /// Escape a [`Path`] for use in Python code.
     fn escape_for_python(&self) -> String;

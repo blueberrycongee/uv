@@ -62,6 +62,12 @@ impl Removal {
         reporter: Option<&dyn CleanReporter>,
         skip_locked_file: bool,
     ) -> io::Result<()> {
+        // On Windows, convert to a verbatim path (`\\?\`) so that traversal and deletion
+        // bypass Win32 path normalization. This handles special filenames like trailing dots.
+        #[cfg(windows)]
+        let verbatim = uv_fs::to_verbatim_path(path);
+        #[cfg(windows)]
+        let path = verbatim.as_ref();
         let metadata = match fs_err::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),

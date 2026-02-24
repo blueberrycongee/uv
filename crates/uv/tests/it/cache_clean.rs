@@ -243,3 +243,48 @@ async fn cache_timeout() {
     error: Timeout ([TIME]) when waiting for lock on `[CACHE_DIR]/` at `[CACHE_DIR]/.lock`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
     ");
 }
+
+/// `cache clean` should handle files with trailing dots on Windows.
+///
+/// On Windows, the Win32 API normalizes paths by stripping trailing dots from filenames.
+/// Using verbatim paths (`\\?\`) bypasses this normalization.
+///
+/// See: <https://github.com/astral-sh/uv/issues/16586>
+#[test]
+#[cfg(windows)]
+fn clean_trailing_dot_filename() -> Result<()> {
+    use std::ffi::OsString;
+
+    let context = uv_test::test_context!("3.12");
+
+    // Create a subdirectory inside the cache to simulate a cached sdist.
+    let subdir = context.cache_dir.child("sdists-v9").child("trailing-dot-test");
+    std::fs::create_dir_all(&subdir)?;
+
+    // Create a file with a trailing dot using a verbatim path, since the normal
+    // Win32 API would strip the trailing dot.
+    let canonical = dunce::canonicalize(&subdir)?;
+    let mut verbatim = OsString::from(r"\\?\");
+    verbatim.push(canonical.join("logging."));
+    std::fs::write(std::path::PathBuf::from(verbatim), b"test")?;
+
+    // Verify the file exists (using verbatim path to read it back).
+    let mut check = OsString::from(r"\\?\");
+    check.push(canonical.join("logging."));
+    assert!(
+        std::path::PathBuf::from(check).exists(),
+        "Expected the trailing-dot file to exist"
+    );
+
+    // `uv cache clean` should succeed despite the trailing-dot filename.
+    uv_snapshot!(context.with_filtered_counts().filters(), context.clean(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Removed [N] files ([SIZE])
+    ");
+
+    Ok(())
+}
